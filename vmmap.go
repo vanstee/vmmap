@@ -12,54 +12,61 @@ package main
 #include <sys/types.h>
 #include <unistd.h>
 
-void vmmap() {
+char buffer[PATH_MAX];
+
+kern_return_t VmmapRegion(mach_vm_address_t *address, mach_vm_size_t *size, char *buffer) {
 	pid_t pid;
 	mach_port_t	task;
 	kern_return_t err;
-	mach_vm_address_t address;
-	mach_vm_size_t size;
 	vm_region_basic_info_data_t info;
 	mach_msg_type_number_t count;
 	mach_port_t object_name;
-	char buffer[PATH_MAX];
+
+	memset(buffer, 0, PATH_MAX);
 
 	pid = getpid();
 	err = task_for_pid(mach_task_self(), pid, &task);
 	if (err != KERN_SUCCESS) {
-		fprintf(stderr, "task_for_pid: error %d - %s\n", err, mach_error_string(err));
-		return;
+		return err;
 	}
 
 	count = VM_REGION_BASIC_INFO_COUNT_64;
-	for (address = VM_MIN_ADDRESS;; address += size) {
-		err = mach_vm_region(task, &address, &size, VM_REGION_BASIC_INFO, (vm_region_info_t)&info, &count, &object_name);
-		if (err != KERN_SUCCESS) {
-			return;
-		}
-
-		if ((info.protection & VM_PROT_EXECUTE) == 0) {
-			continue;
-		}
-
-		memset(buffer, 0, sizeof(buffer));
-		proc_regionfilename(pid, address, &buffer, PATH_MAX);
-		if (strlen(buffer) == 0) {
-			continue;
-		}
-
-		printf("%016llx-%016llx %08x %s\n", address, address+size, 0, buffer);
+	err = mach_vm_region(task, address, size, VM_REGION_BASIC_INFO, (vm_region_info_t)&info, &count, &object_name);
+	if (err != KERN_SUCCESS) {
+		return err;
 	}
+
+	if ((info.protection & VM_PROT_EXECUTE) == 0) {
+		return KERN_SUCCESS;
+	}
+
+	proc_regionfilename(pid, *address, buffer, PATH_MAX);
+	return KERN_SUCCESS;
 }
 */
 import "C"
 import (
+	"fmt"
 	"log"
 	"runtime"
+)
+
+var (
+	address C.mach_vm_address_t
+	size    C.mach_vm_size_t
+	ret     C.kern_return_t
 )
 
 func main() {
 	if runtime.GOOS != "darwin" {
 		log.Fatalf("OS %s not supported\n", runtime.GOOS)
 	}
-	C.vmmap()
+
+	for address = C.VM_MIN_ADDRESS; ret != C.KERN_INVALID_ADDRESS; address = address + size {
+		ret = C.VmmapRegion(&address, &size, &C.buffer[0])
+		file := C.GoString(&C.buffer[0])
+		if file != "" {
+			fmt.Printf("%016x-%016x %08x %s\n", address, address+size, 0, file)
+		}
+	}
 }
